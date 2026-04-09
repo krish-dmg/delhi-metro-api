@@ -1,0 +1,10 @@
+{
+  "name": "delhi-metro-api-netlify",
+  "version": "1.0.0",
+  "description": "Delhi Metro shortest path API — rewritten for Netlify Functions",
+  "main": "netlify/functions/route.js",
+  "scripts": {
+    "dev": "netlify dev"
+  },
+  "license": "GPL-3.0"
+}

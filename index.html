@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Delhi Metro API</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #0f0f0f;
+      color: #f0f0f0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 40px 20px;
+    }
+    h1 { font-size: 2.2rem; color: #ff6b35; margin-bottom: 8px; }
+    .subtitle { color: #888; margin-bottom: 40px; font-size: 1rem; }
+    .card {
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 12px;
+      padding: 28px 32px;
+      width: 100%;
+      max-width: 700px;
+      margin-bottom: 24px;
+    }
+    h2 { font-size: 1.1rem; color: #ff6b35; margin-bottom: 16px; }
+    .endpoint {
+      background: #111;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 14px 18px;
+      margin-bottom: 12px;
+      font-family: monospace;
+      font-size: 0.9rem;
+    }
+    .method { color: #4ade80; font-weight: bold; margin-right: 10px; }
+    .path { color: #60a5fa; }
+    .param { color: #fbbf24; }
+    .desc { color: #999; font-size: 0.85rem; margin-top: 6px; font-family: sans-serif; }
+    .try-box { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+    input {
+      flex: 1;
+      min-width: 180px;
+      padding: 10px 14px;
+      background: #111;
+      border: 1px solid #333;
+      border-radius: 8px;
+      color: #fff;
+      font-size: 0.9rem;
+    }
+    input:focus { outline: none; border-color: #ff6b35; }
+    button {
+      padding: 10px 20px;
+      background: #ff6b35;
+      color: #000;
+      border: none;
+      border-radius: 8px;
+      font-weight: 700;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    button:hover { background: #ff8555; }
+    pre {
+      background: #111;
+      border: 1px solid #222;
+      border-radius: 8px;
+      padding: 16px;
+      margin-top: 16px;
+      overflow-x: auto;
+      font-size: 0.82rem;
+      color: #a3e635;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .badge {
+      display: inline-block;
+      background: #1a1a2e;
+      color: #818cf8;
+      border: 1px solid #3730a3;
+      border-radius: 4px;
+      padding: 2px 8px;
+      font-size: 0.75rem;
+      margin-left: 8px;
+    }
+  </style>
+</head>
+<body>
+  <h1>🚇 Delhi Metro API</h1>
+  <p class="subtitle">Serverless shortest path API · Powered by Dijkstra's Algorithm</p>
+
+  <div class="card">
+    <h2>📡 Endpoints</h2>
+    <div class="endpoint">
+      <span class="method">GET</span>
+      <span class="path">/route?<span class="param">from</span>=StationA&<span class="param">to</span>=StationB</span>
+      <div class="desc">Returns shortest path, interchange stations, metro lines, and travel time.</div>
+    </div>
+    <div class="endpoint">
+      <span class="method">GET</span>
+      <span class="path">/route/stations</span>
+      <div class="desc">Returns a full list of all available station names.</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>🧪 Try It Live</h2>
+    <div class="try-box">
+      <input id="from" placeholder="From (e.g. Rajiv Chowk)" value="Rajiv Chowk" />
+      <input id="to" placeholder="To (e.g. Hauz Khas)" value="Hauz Khas" />
+      <button onclick="tryRoute()">Find Route</button>
+    </div>
+    <pre id="output">// Result will appear here</pre>
+  </div>
+
+  <div class="card">
+    <h2>📦 Response Format</h2>
+    <pre>{
+  "path": ["Rajiv Chowk", "Patel Chowk", ..., "Hauz Khas"],
+  "time": 28.44,
+  "line1": ["yellow"],
+  "line2": [],
+  "interchange": []
+}</pre>
+  </div>
+
+  <script>
+    async function tryRoute() {
+      const from = document.getElementById('from').value.trim();
+      const to = document.getElementById('to').value.trim();
+      const out = document.getElementById('output');
+      out.textContent = '// Loading...';
+      try {
+        const res = await fetch(`/route?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+        const data = await res.json();
+        out.textContent = JSON.stringify(data, null, 2);
+      } catch (e) {
+        out.textContent = '// Error: ' + e.message;
+      }
+    }
+  </script>
+</body>
+</html>
