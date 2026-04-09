@@ -1,383 +1,277 @@
-// Delhi Metro API - Netlify Serverless Function
-// Rewritten from Express server to Netlify Function
-// Original logic by DelhiMetroAPI, adapted for serverless by OTZUA
+// ============================================================
+//  Delhi Metro API — Netlify Serverless Function
+//  All station data is embedded inline (no file-system deps).
+//  Powered by Dijkstra's Algorithm.
+// ============================================================
 
-const path = require("path");
-
-// ─── Priority Queue ────────────────────────────────────────────────────────────
+// ─── Priority Queue ──────────────────────────────────────────
 class PriorityQueue {
-  constructor() {
-    this.collection = [];
-  }
-  enqueue(element) {
-    if (this.isEmpty()) {
-      this.collection.push(element);
-    } else {
-      let added = false;
-      for (let i = 1; i <= this.collection.length; i++) {
-        if (element[1] < this.collection[i - 1][1]) {
-          this.collection.splice(i - 1, 0, element);
-          added = true;
-          break;
-        }
-      }
-      if (!added) {
-        this.collection.push(element);
-      }
+  constructor() { this.items = []; }
+  enqueue(el) {
+    let added = false;
+    for (let i = 0; i < this.items.length; i++) {
+      if (el[1] < this.items[i][1]) { this.items.splice(i, 0, el); added = true; break; }
     }
+    if (!added) this.items.push(el);
   }
-  dequeue() {
-    return this.collection.shift();
-  }
-  isEmpty() {
-    return this.collection.length === 0;
-  }
+  dequeue() { return this.items.shift(); }
+  isEmpty()  { return this.items.length === 0; }
 }
 
-// ─── Graph ─────────────────────────────────────────────────────────────────────
+// ─── Graph ───────────────────────────────────────────────────
 class Graph {
-  constructor() {
-    this.nodes = [];
-    this.adjacencyList = {};
+  constructor() { this.nodes = []; this.adj = {}; }
+
+  // Idempotent — safe to call multiple times for the same node
+  addNode(n) {
+    if (!this.adj[n]) { this.nodes.push(n); this.adj[n] = []; }
   }
 
-  addNode(node) {
-    this.nodes.push(node);
-    this.adjacencyList[node] = [];
+  addEdge(a, b, w, line) {
+    this.adj[a].push({ node: b, weight: w, line });
+    this.adj[b].push({ node: a, weight: w, line });
   }
 
-  addEdge(node1, node2, weight, color) {
-    this.adjacencyList[node1].push({ node: node2, weight, line: color });
-    this.adjacencyList[node2].push({ node: node1, weight, line: color });
+  getLine(a, b) {
+    const edge = this.adj[a] && this.adj[a].find(e => e.node === b);
+    return edge ? edge.line : null;
   }
 
-  getline(sta1, sta2) {
-    for (let i = 0; i < this.adjacencyList[sta1].length; i++) {
-      if (this.adjacencyList[sta1][i].node === sta2) {
-        return this.adjacencyList[sta1][i].line;
-      }
-    }
-    return null;
-  }
+  shortestRoute(start, end) {
+    if (!this.adj[start]) return { error: `Station not found: "${start}"` };
+    if (!this.adj[end])   return { error: `Station not found: "${end}"` };
+    if (start === end)    return { error: "Source and destination cannot be the same." };
 
-  shortestRoute(startNode, endNode) {
-    if (!this.adjacencyList[startNode]) {
-      return { error: `Station not found: "${startNode}"` };
-    }
-    if (!this.adjacencyList[endNode]) {
-      return { error: `Station not found: "${endNode}"` };
-    }
-    if (startNode === endNode) {
-      return { error: "Source and destination cannot be the same station." };
-    }
-
-    let times = {};
-    let backtrace = {};
-    let pq = new PriorityQueue();
-
-    times[startNode] = 0;
-    this.nodes.forEach((node) => {
-      if (node !== startNode) times[node] = Infinity;
-    });
-
-    pq.enqueue([startNode, 0]);
+    const dist = {}, prev = {}, pq = new PriorityQueue();
+    this.nodes.forEach(n => { dist[n] = n === start ? 0 : Infinity; });
+    pq.enqueue([start, 0]);
 
     while (!pq.isEmpty()) {
-      let shortestStep = pq.dequeue();
-      let currentNode = shortestStep[0];
-
-      this.adjacencyList[currentNode].forEach((neighbor) => {
-        let time = times[currentNode] + neighbor.weight;
-
-        if (currentNode !== startNode) {
-          if (
-            this.getline(currentNode, neighbor.node) !==
-            this.getline(currentNode, backtrace[currentNode])
-          ) {
-            if (
-              this.getline(currentNode, neighbor.node) === "1.2km Skywalk" ||
-              this.getline(currentNode, backtrace[currentNode]) === "1.2km Skywalk"
-            ) {
-              time = time + 0;
-            } else {
-              time = time + 13;
-            }
+      const [cur] = pq.dequeue();
+      for (const nb of this.adj[cur]) {
+        let d = dist[cur] + nb.weight;
+        // Interchange penalty = 13 min (except Skywalk)
+        if (cur !== start && prev[cur] !== undefined) {
+          const lineIn  = this.getLine(cur, prev[cur]);
+          const lineOut = this.getLine(cur, nb.node);
+          if (lineIn !== lineOut && lineIn !== "1.2km Skywalk" && lineOut !== "1.2km Skywalk") {
+            d += 13;
           }
         }
-
-        if (time < times[neighbor.node]) {
-          times[neighbor.node] = time;
-          backtrace[neighbor.node] = currentNode;
-          pq.enqueue([neighbor.node, time]);
-        }
-      });
-    }
-
-    if (times[endNode] === Infinity) {
-      return { error: "No route found between these stations." };
-    }
-
-    let path = [endNode];
-    let lastStep = endNode;
-
-    let result = {
-      line1: [],
-      line2: [],
-      interchange: [],
-      path: null,
-      time: null,
-    };
-
-    while (lastStep !== startNode) {
-      if (
-        backtrace[lastStep] !== undefined &&
-        backtrace[backtrace[lastStep]] !== undefined
-      ) {
-        if (
-          this.getline(lastStep, backtrace[lastStep]) !==
-          this.getline(backtrace[lastStep], backtrace[backtrace[lastStep]])
-        ) {
-          if (backtrace[lastStep] !== startNode) {
-            result.line1.unshift(
-              this.getline(backtrace[lastStep], backtrace[backtrace[lastStep]])
-            );
-            result.line2.unshift(this.getline(lastStep, backtrace[lastStep]));
-            result.interchange.unshift(backtrace[lastStep]);
-          }
+        if (d < dist[nb.node]) {
+          dist[nb.node] = d;
+          prev[nb.node] = cur;
+          pq.enqueue([nb.node, d]);
         }
       }
-
-      path.unshift(backtrace[lastStep]);
-      lastStep = backtrace[lastStep];
     }
 
-    result.path = path;
-    result.time = times[endNode];
+    if (!isFinite(dist[end])) return { error: "No route found between these stations." };
 
-    if (result.interchange.length === 0) {
-      result.line1[0] = this.getline(result.path[0], result.path[1]);
+    // Reconstruct path
+    const path = [];
+    let cur = end;
+    while (cur !== undefined) { path.unshift(cur); cur = prev[cur]; }
+
+    // Detect lines and interchanges
+    const result = { line1: [], line2: [], interchange: [], path, time: dist[end] };
+
+    for (let i = 0; i < path.length - 1; i++) {
+      const line = this.getLine(path[i], path[i + 1]);
+      const prevLine = i > 0 ? this.getLine(path[i - 1], path[i]) : null;
+      if (i === 0) {
+        result.line1.push(line);
+      } else if (prevLine && prevLine !== line && line !== "1.2km Skywalk" && prevLine !== "1.2km Skywalk") {
+        if (!result.line2.includes(line)) result.line2.push(line);
+        if (!result.interchange.includes(path[i])) result.interchange.push(path[i]);
+      }
     }
 
     return result;
   }
 
-  getAllStations() {
-    return [...this.nodes].sort();
-  }
+  getAllStations() { return [...this.nodes].sort(); }
 }
 
-// ─── Build Graph ───────────────────────────────────────────────────────────────
+// ─── Inline Station Data ─────────────────────────────────────
+//  All data extracted from the original JSON files.
+//  Key: line color name, Value: [array of station names in order]
+
+const LINES = {
+  blue: [
+    "Noida Electronic City","Noida Sector 62","Noida Sector 59","Noida Sector 61",
+    "Noida Sector 52","Noida Sector 34","Noida City Centre","Golf Course",
+    "Botanical Garden","Noida Sector 18","Noida Sector 16","Noida Sector 15",
+    "New Ashok Nagar","Mayur Vihar Extension","Mayur Vihar – I","Akshardham",
+    "Yamuna Bank","Indraprastha","Pragati Maidan","Mandi House","Barakhambha Road",
+    "Rajiv Chowk","Ramakrishna Ashram Marg","Jhandewalan","Karol Bagh",
+    "Rajendra Place","Patel Nagar","Shadipur","Kirti Nagar","Moti Nagar",
+    "Ramesh Nagar","Rajouri Garden","Tagore Garden","Subhash Nagar","Tilak Nagar",
+    "Janakpuri East","Janakpuri West","Uttam Nagar East","Uttam Nagar West",
+    "Nawada","Dwarka Mor","Dwarka","Dwarka Sector 14","Dwarka Sector 13",
+    "Dwarka Sector 12","Dwarka Sector 11","Dwarka Sector 10","Dwarka Sector 9",
+    "Dwarka Sector 8","Dwarka Sector 21"
+  ],
+  bluebranch: [
+    "Yamuna Bank","Laxmi Nagar","Nirman Vihar","Preet Vihar","Karkarduma",
+    "Anand Vihar","Kaushambi","Vaishali","Vaishali Extension","Vasundhra Sector 14",
+    "Sahibabad","Mohan Nagar"
+  ],
+  yellow: [
+    "Samaypur Badli","Rohini Sector 18","Haiderpur","Jahangirpuri","Adarsh Nagar",
+    "Azadpur","Model Town","GTB Nagar","Vishwa Vidyalaya","Vidhan Sabha",
+    "Civil Lines","Kashmere Gate","Chandni Chowk","Chawri Bazar","New Delhi",
+    "Rajiv Chowk","Patel Chowk","Central Secretariat","Udyog Bhawan",
+    "Lok Kalyan Marg","Jor Bagh","INA","AIIMS","Green Park","Hauz Khas",
+    "Malviya Nagar","Saket","Qutub Minar","Chhatarpur","Sultanpur","Ghitorni",
+    "Arjan Garh","Guru Dronacharya","Sikandarpur","MG Road","IFFCO Chowk",
+    "HUDA City Centre"
+  ],
+  violet: [
+    "Kashmere Gate","Lal Qila","Jama Masjid","Delhi Gate","ITO","Mandi House",
+    "Janpath","Central Secretariat","Khan Market","Jawaharlal Nehru Stadium",
+    "Jangpura","Lajpat Nagar","Moolchand","Kailash Colony","Nehru Place",
+    "Kalkaji Mandir","Govind Puri","Harkesh Nagar","Jasola Apollo","Sarita Vihar",
+    "Mohan Estate","Tughlakabad","Badarpur","Sarai","NHPC Chowk","Mewala Maharajpur",
+    "Sector 28","Badkhal Mor","Faridabad Old","Neelam Chowk Ajronda","Bata Chowk",
+    "Escorts Mujesar","Sant Surdas","Raja Nahar Singh"
+  ],
+  red: [
+    "Shaheed Sthal","Hindon","Arthala","Mohan Nagar","Shyam park","Major Mohit Sharma",
+    "Raj Bagh","Shaheed Nagar","Dilshad Garden","Jhilmil","Mansarovar Park","Shahdara",
+    "Welcome","Seelampur","Shastri Park","Kashmere Gate","Tis Hazari","Pul Bangash",
+    "Pratap Nagar","Shastri Nagar","Inderlok","Kanhiya Nagar","Keshav Puram",
+    "Netaji Subhash Place","Kohat Enclave","Pitam Pura","Rohini East","Rohini West","Rithala"
+  ],
+  green: [
+    "Inderlok","Ashok Park Main","Punjabi Bagh","Shivaji Park","Madipur",
+    "Paschim Vihar East","Paschim Vihar West","Peera Garhi","Udyog Nagar",
+    "Surajmal Stadium","Nangloi","Nangloi Railway station","Rajdhani Park","Mundka",
+    "Mundka Industrial Area","Ghevra Metro station","Tikri Kalan","Tikri Border",
+    "Pandit Shree Ram Sharma","Bahadurgarh City","Brigadier Hoshiyar Singh"
+  ],
+  greenbranch: [
+    "Ashok Park Main","Satguru Ram Singh Marg","Kirti Nagar"
+  ],
+  pink: [
+    "Majlis Park","Azadpur","Shalimar Bagh","Netaji Subhash Place","Shakurpur",
+    "Punjabi Bagh West","ESI Hospital","Rajouri Garden","Mayapuri","Naraina Vihar",
+    "Delhi Cantonment","Durgabai Deshmukh South Campus","Sir Vishweshwaraiah Moti Bagh",
+    "Bhikaji Cama Place","Sarojini Nagar","INA","South Extension","Lajpat Nagar",
+    "Vinobapuri","Ashram","Hazrat Nizamuddin","Mayur Vihar – I","Mayur Vihar Pocket I"
+  ],
+  pinkbranch: [
+    "Trilokpuri Sanjay Lake","East Vinod Nagar - Mayur Vihar-II","Mandawali - West Vinod Nagar",
+    "IP Extension","Anand Vihar","Karkarduma","Karkarduma Court","Krishna Nagar",
+    "East Azad Nagar","Welcome","Jaffrabad","Maujpur-Babarpur","Gokulpuri",
+    "Johri Enclave","Shiv Vihar"
+  ],
+  magenta: [
+    "Janakpuri West","Dabri Mor","Dashrath Puri","Palam","Sadar Bazar Cantonment",
+    "Terminal 1 IGI Airport","Shankar Vihar","Vasant Vihar","Munirka","RK Puram",
+    "IIT Delhi","Hauz Khas","Panchsheel Park","Chirag Delhi","Greater Kailash",
+    "Nehru Enclave","Kalkaji Mandir","Okhla NSIC","Sukhdev Vihar","Jamia Millia Islamia",
+    "Okhla Vihar","Jasola Vihar Shaheen Bagh","Kalindi Kunj","Okhla Bird Sanctuary",
+    "Botanical Garden"
+  ],
+  orange: [
+    "New Delhi","Shivaji Stadium","Dhaula Kuan","Delhi Aerocity","Airport","Dwarka Sector 21"
+  ],
+};
+
+// Stations that are shared between lines (already added by a prior line)
+const SKIP = {
+  bluebranch:  ["Yamuna Bank"],
+  yellow:      ["Hauz Khas","Rajiv Chowk"],
+  violet:      ["Kashmere Gate","Mandi House","Central Secretariat","Kalkaji Mandir"],
+  red:         ["Kashmere Gate"],
+  green:       ["Inderlok"],
+  greenbranch: ["Kirti Nagar","Ashok Park Main"],
+  pink:        ["Azadpur","Netaji Subhash Place","Rajouri Garden","INA","Lajpat Nagar","Mayur Vihar – I"],
+  pinkbranch:  ["Anand Vihar","Karkarduma","Welcome"],
+  magenta:     ["Janakpuri West","Botanical Garden","Kalkaji Mandir","Hauz Khas"],
+  orange:      ["New Delhi","Dwarka Sector 21"],
+};
+
+const WEIGHTS = {
+  blue: 2.02, bluebranch: 1.875, yellow: 2.22, violet: 2.24, red: 2.03,
+  green: 2.49, greenbranch: 1.33, pink: 2.69, pinkbranch: 2.43,
+  magenta: 2.36, orange: 5.2,
+};
+
+// ─── Build Graph (runs once on cold start) ───────────────────
 function buildGraph() {
   const g = new Graph();
-  const linesDir = path.join(__dirname, "lines");
 
-  // Blue Line
-  const blue = require(path.join(linesDir, "blue.json"));
-  const blueline = blue.map((s) => s["Hindi"]);
-  blueline.forEach((s) => g.addNode(s));
-  for (let i = 0; i < blueline.length - 1; i++) {
-    g.addEdge(blueline[i], blueline[i + 1], 2.02, "blue");
+  for (const [line, stations] of Object.entries(LINES)) {
+    const skip = SKIP[line] || [];
+    // Add nodes for stations not in the skip list for this line
+    stations.forEach(s => { if (!skip.includes(s)) g.addNode(s); });
+    // Always ensure BOTH endpoints exist before adding an edge
+    // (a skipped station may still need to be a node for cross-line edges)
+    for (let i = 0; i < stations.length - 1; i++) {
+      g.addNode(stations[i]);     // idempotent
+      g.addNode(stations[i + 1]); // idempotent
+      g.addEdge(stations[i], stations[i + 1], WEIGHTS[line], line);
+    }
   }
 
-  // Blue Branch
-  const bluebranch = require(path.join(linesDir, "bluebranch.json"));
-  const bluebranchline = bluebranch.map((s) => s["Hindi"]);
-  bluebranchline.forEach((s) => {
-    if (s !== "Yamuna Bank") g.addNode(s);
-  });
-  for (let i = 0; i < bluebranchline.length - 1; i++) {
-    g.addEdge(bluebranchline[i], bluebranchline[i + 1], 1.875, "bluebranch");
-  }
-
-  // Magenta Line
-  const magenta = require(path.join(linesDir, "magenta.json"));
-  const magentaline = magenta.map((s) => s["25"]);
-  magentaline.forEach((s) => {
-    if (s !== "Janakpuri West" && s !== "Botanical Garden") g.addNode(s);
-  });
-  for (let i = 0; i < magentaline.length - 1; i++) {
-    g.addEdge(magentaline[i], magentaline[i + 1], 2.36, "magenta");
-  }
-
-  // Yellow Line
-  const yellow = require(path.join(linesDir, "yellow.json"));
-  const yellowline = yellow.map((s) => s["Hindi"]);
-  yellowline.forEach((s) => {
-    if (s !== "Hauz Khas" && s !== "Rajiv Chowk") g.addNode(s);
-  });
-  for (let i = 0; i < yellowline.length - 1; i++) {
-    g.addEdge(yellowline[i], yellowline[i + 1], 2.22, "yellow");
-  }
-
-  // Violet Line
-  const violet = require(path.join(linesDir, "violet.json"));
-  const violetline = violet.map((s) => s["Hindi"]);
-  violetline.forEach((s) => {
-    if (
-      s !== "Kashmere Gate" &&
-      s !== "Mandi House" &&
-      s !== "Central Secretariat" &&
-      s !== "Kalkaji Mandir"
-    )
-      g.addNode(s);
-  });
-  for (let i = 0; i < violetline.length - 1; i++) {
-    g.addEdge(violetline[i], violetline[i + 1], 2.24, "violet");
-  }
-
-  // Red Line
-  const red = require(path.join(linesDir, "red.json"));
-  const redline = red.map((s) => s["Hindi"]);
-  redline.forEach((s) => {
-    if (s !== "Kashmere Gate") g.addNode(s);
-  });
-  for (let i = 0; i < redline.length - 1; i++) {
-    g.addEdge(redline[i], redline[i + 1], 2.03, "red");
-  }
-
-  // Green Line
-  const green = require(path.join(linesDir, "green.json"));
-  const greenline = green.map((s) => s["Hindi"]);
-  greenline.forEach((s) => {
-    if (s !== "Inderlok") g.addNode(s);
-  });
-  for (let i = 0; i < greenline.length - 1; i++) {
-    g.addEdge(greenline[i], greenline[i + 1], 2.49, "green");
-  }
-
-  // Green Branch
-  const greenbranch = require(path.join(linesDir, "greenbranch.json"));
-  const greenbranchline = greenbranch.map((s) => s["Hindi"]);
-  greenbranchline.forEach((s) => {
-    if (s !== "Kirti Nagar" && s !== "Ashok Park Main") g.addNode(s);
-  });
-  for (let i = 0; i < greenbranchline.length - 1; i++) {
-    g.addEdge(greenbranchline[i], greenbranchline[i + 1], 1.33, "greenbranch");
-  }
-
-  // Pink Line
-  const pink = require(path.join(linesDir, "pink.json"));
-  const pinkline = pink.map((s) => s["Hindi"]);
-  pinkline.forEach((s) => {
-    if (
-      s !== "Azadpur" &&
-      s !== "Netaji Subhash Place" &&
-      s !== "Rajouri Garden" &&
-      s !== "INA" &&
-      s !== "Lajpat Nagar" &&
-      s !== "Mayur Vihar – I"
-    )
-      g.addNode(s);
-  });
-  for (let i = 0; i < pinkline.length - 1; i++) {
-    g.addEdge(pinkline[i], pinkline[i + 1], 2.69, "pink");
-  }
-
-  // Pink Branch
-  const pinkbranch = require(path.join(linesDir, "pinkbranch.json"));
-  const pinkbranchline = pinkbranch.map((s) => s["Hindi"]);
-  pinkbranchline.forEach((s) => {
-    if (s !== "Anand Vihar" && s !== "Karkarduma" && s !== "Welcome")
-      g.addNode(s);
-  });
-  for (let i = 0; i < pinkbranchline.length - 1; i++) {
-    g.addEdge(pinkbranchline[i], pinkbranchline[i + 1], 2.43, "pinkbranch");
-  }
-
-  // Orange Line (Airport Express)
-  const orange = require(path.join(linesDir, "orange.json"));
-  const orangeline = orange.map((s) => s["Hindi"]);
-  orangeline.forEach((s) => {
-    if (s !== "New Delhi" && s !== "Dwarka Sector 21") g.addNode(s);
-  });
-  for (let i = 0; i < orangeline.length - 1; i++) {
-    g.addEdge(orangeline[i], orangeline[i + 1], 5.2, "orange");
-  }
-
-  // Special Skywalk Connection
+  // Special Skywalk connection (both stations already in pink line, but addNode is safe)
+  g.addNode("Dhaula Kuan");
+  g.addNode("Durgabai Deshmukh South Campus");
   g.addEdge("Dhaula Kuan", "Durgabai Deshmukh South Campus", 18, "1.2km Skywalk");
 
   return g;
 }
 
-// Build graph once when the function cold-starts (cached in Lambda container)
 let graph;
 try {
   graph = buildGraph();
+  console.log(`[Metro API] Graph ready: ${graph.nodes.length} stations`);
 } catch (err) {
-  console.error("Failed to build graph:", err);
+  console.error("[Metro API] Graph build failed:", err);
 }
 
-// ─── Netlify Handler ───────────────────────────────────────────────────────────
-exports.handler = async function (event, context) {
-  // CORS headers — allow any origin so your website can call this
+// ─── Netlify Handler ─────────────────────────────────────────
+exports.handler = async (event) => {
   const headers = {
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Headers": "Content-Type, Accept",
     "Access-Control-Allow-Methods": "GET, OPTIONS",
     "Content-Type": "application/json",
   };
 
-  // Handle preflight OPTIONS request
-  if (event.httpMethod === "OPTIONS") {
-    return { statusCode: 200, headers, body: "" };
-  }
+  if (event.httpMethod === "OPTIONS") return { statusCode: 200, headers, body: "" };
 
   if (!graph) {
-    return {
-      statusCode: 500,
-      headers,
-      body: JSON.stringify({ error: "Graph failed to initialize." }),
-    };
+    return { statusCode: 500, headers, body: JSON.stringify({ error: "Graph failed to initialize." }) };
   }
 
   const params = event.queryStringParameters || {};
-  const rawPath = event.path || "";
-  const pathParts = rawPath
-    .replace(/^\/\.netlify\/functions\/route/, "")
-    .replace(/^\/route/, "");
+  const rawPath = (event.path || "").replace(/^\/\.netlify\/functions\/route/, "").replace(/^\/route/, "");
 
-  // ── GET /route/stations — list all stations
-  if (pathParts === "/stations" || rawPath.endsWith("/stations") || params.action === "stations") {
-    return {
-      statusCode: 200,
-      headers,
-      body: JSON.stringify({
-        total: graph.getAllStations().length,
-        stations: graph.getAllStations(),
-      }),
-    };
+  // GET /route/stations  OR  ?action=stations
+  if (rawPath === "/stations" || params.action === "stations") {
+    const stations = graph.getAllStations();
+    return { statusCode: 200, headers, body: JSON.stringify({ total: stations.length, stations }) };
   }
 
-  // ── GET /route?from=X&to=Y — find route
+  // GET /route?from=X&to=Y
   const from = params.from ? params.from.trim() : null;
-  const to = params.to ? params.to.trim() : null;
+  const to   = params.to   ? params.to.trim()   : null;
 
   if (!from || !to) {
     return {
-      statusCode: 400,
-      headers,
+      statusCode: 400, headers,
       body: JSON.stringify({
-        error: 'Missing parameters. Use: ?from=StationName&to=StationName',
-        example: "?from=Rajiv Chowk&to=Hauz Khas",
-        docs: "GET /route?from=SOURCE&to=DESTINATION  |  GET /route/stations",
+        error: "Missing parameters.",
+        usage: "GET /route?from=STATION_A&to=STATION_B",
+        example: "/route?from=Rajiv%20Chowk&to=Hauz%20Khas",
       }),
     };
   }
 
   const result = graph.shortestRoute(from, to);
-
-  if (result.error) {
-    return {
-      statusCode: 404,
-      headers,
-      body: JSON.stringify({ error: result.error }),
-    };
-  }
-
-  return {
-    statusCode: 200,
-    headers,
-    body: JSON.stringify(result),
-  };
+  if (result.error) return { statusCode: 404, headers, body: JSON.stringify(result) };
+  return { statusCode: 200, headers, body: JSON.stringify(result) };
 };
